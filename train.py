@@ -1,31 +1,43 @@
 from __future__ import print_function
 import os
+import json
 import torch
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 import argparse
 import torch.utils.data as data
-from data import WiderFaceDetection, detection_collate, preproc, cfg_mnet, cfg_re50
-from layers.modules import MultiBoxLoss
-from layers.functions.prior_box import PriorBox
+from data.dataset_face import FaceDetectionDataset, detection_collate
+from data.data_augment import preproc
+from retina_torch.rcnn_torch.layers.modules import MultiBoxLoss
+from retina_torch.rcnn_torch.layers.functions.prior_box import PriorBox
 import time
 import datetime
 import math
-from models.retinaface import RetinaFace
+from retina_torch.rcnn_torch.retinaface import RetinaFace
+
+with open('./retina_torch/config.json') as cfg_file:
+    cfg = json.load(cfg_file)
+
+cfg_re50 = cfg['detector']['cfg_re50']
+cfg_mnet = cfg['detector']['cfg_mnet']
+
 
 parser = argparse.ArgumentParser(description='Retinaface Training')
-parser.add_argument('--training_dataset', default='./data/widerface/train/label.txt', help='Training dataset directory')
-parser.add_argument('--network', default='mobile0.25', help='Backbone network mobile0.25 or resnet50')
+parser.add_argument('--training_dataset', default='./data/KCV/1/images_data.json', help='Training dataset directory')
+parser.add_argument('--network', default='resnet50', help='Backbone network mobile0.25 or resnet50')
 parser.add_argument('--num_workers', default=4, type=int, help='Number of workers used in dataloading')
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-parser.add_argument('--resume_net', default=None, help='resume net for retraining')
+parser.add_argument('--resume_net', default="models/Resnet50_Final.pth", help='resume net for retraining')
 parser.add_argument('--resume_epoch', default=0, type=int, help='resume iter for retraining')
 parser.add_argument('--weight_decay', default=5e-4, type=float, help='Weight decay for SGD')
 parser.add_argument('--gamma', default=0.1, type=float, help='Gamma update for SGD')
 parser.add_argument('--save_folder', default='./weights/', help='Location to save checkpoint models')
 
 args = parser.parse_args()
+args.resume_epoch = 100
+args.resume_net = "weights/Resnet50_epoch_with_neg_100.pth"
+args.training_dataset = "./data/KCV/2/images_data.json"
 
 if not os.path.exists(args.save_folder):
     os.mkdir(args.save_folder)
@@ -35,7 +47,7 @@ if args.network == "mobile0.25":
 elif args.network == "resnet50":
     cfg = cfg_re50
 
-rgb_mean = (104, 117, 123) # bgr order
+rgb_mean = (104, 117, 123)  # bgr order
 num_classes = 2
 img_dim = cfg['image_size']
 num_gpu = cfg['ngpu']
@@ -64,7 +76,7 @@ if args.resume_net is not None:
     for k, v in state_dict.items():
         head = k[:7]
         if head == 'module.':
-            name = k[7:] # remove `module.`
+            name = k[7:]  # remove `module.`
         else:
             name = k
         new_state_dict[name] = v
@@ -91,7 +103,7 @@ def train():
     epoch = 0 + args.resume_epoch
     print('Loading Dataset...')
 
-    dataset = WiderFaceDetection( training_dataset,preproc(img_dim, rgb_mean))
+    dataset = FaceDetectionDataset( training_dataset,preproc(img_dim, rgb_mean))
 
     epoch_size = math.ceil(len(dataset) / batch_size)
     max_iter = max_epoch * epoch_size
@@ -109,7 +121,7 @@ def train():
             # create batch iterator
             batch_iterator = iter(data.DataLoader(dataset, batch_size, shuffle=True, num_workers=num_workers, collate_fn=detection_collate))
             if (epoch % 10 == 0 and epoch > 0) or (epoch % 5 == 0 and epoch > cfg['decay1']):
-                torch.save(net.state_dict(), save_folder + cfg['name']+ '_epoch_' + str(epoch) + '.pth')
+                torch.save(net.state_dict(), save_folder + cfg['name'] + '_epoch_with_neg_' + str(epoch) + '.pth')
             epoch += 1
 
         load_t0 = time.time()
@@ -138,7 +150,7 @@ def train():
               .format(epoch, max_epoch, (iteration % epoch_size) + 1,
               epoch_size, iteration + 1, max_iter, loss_l.item(), loss_c.item(), loss_landm.item(), lr, batch_time, str(datetime.timedelta(seconds=eta))))
 
-    torch.save(net.state_dict(), save_folder + cfg['name'] + '_Final.pth')
+    torch.save(net.state_dict(), save_folder + cfg['name'] + '_epoch_with_neg_' + str(epoch) + '.pth')
     # torch.save(net.state_dict(), save_folder + 'Final_Retinaface.pth')
 
 
@@ -155,6 +167,7 @@ def adjust_learning_rate(optimizer, gamma, epoch, step_index, iteration, epoch_s
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     return lr
+
 
 if __name__ == '__main__':
     train()
